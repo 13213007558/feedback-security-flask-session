@@ -51,6 +51,7 @@ class MongoDBSessionInterface(ServerSideSessionInterface):
         serialization_format: str = Defaults.SESSION_SERIALIZATION_FORMAT,
         db: str = Defaults.SESSION_MONGODB_DB,
         collection: str = Defaults.SESSION_MONGODB_COLLECT,
+        allow_pickle_fallback: Optional[bool] = None,
     ):
 
         if client is None or not isinstance(client, MongoClient):
@@ -69,7 +70,13 @@ class MongoDBSessionInterface(ServerSideSessionInterface):
         self.store.create_index("expiration", expireAfterSeconds=0)
 
         super().__init__(
-            app, key_prefix, use_signer, permanent, sid_length, serialization_format
+            app,
+            key_prefix,
+            use_signer,
+            permanent,
+            sid_length,
+            serialization_format,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     def _retrieve_session_data(self, store_id: str) -> Optional[dict]:

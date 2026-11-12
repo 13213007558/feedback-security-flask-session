@@ -53,6 +53,7 @@ class MemcachedSessionInterface(ServerSideSessionInterface):
         permanent: bool = Defaults.SESSION_PERMANENT,
         sid_length: int = Defaults.SESSION_ID_LENGTH,
         serialization_format: str = Defaults.SESSION_SERIALIZATION_FORMAT,
+        allow_pickle_fallback: Optional[bool] = None,
     ):
         if client is None or not all(
             hasattr(client, method) for method in ["get", "set", "delete"]
@@ -65,7 +66,13 @@ class MemcachedSessionInterface(ServerSideSessionInterface):
             client = self._get_preferred_memcache_client()
         self.client = client
         super().__init__(
-            app, key_prefix, use_signer, permanent, sid_length, serialization_format
+            app,
+            key_prefix,
+            use_signer,
+            permanent,
+            sid_length,
+            serialization_format,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     def _get_preferred_memcache_client(self):

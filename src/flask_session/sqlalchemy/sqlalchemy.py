@@ -87,6 +87,7 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
         schema: Optional[str] = Defaults.SESSION_SQLALCHEMY_SCHEMA,
         bind_key: Optional[str] = Defaults.SESSION_SQLALCHEMY_BIND_KEY,
         cleanup_n_requests: Optional[int] = Defaults.SESSION_CLEANUP_N_REQUESTS,
+        allow_pickle_fallback: Optional[bool] = None,
     ):
         self.app = app
 
@@ -119,6 +120,7 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
             sid_length,
             serialization_format,
             cleanup_n_requests,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     @retry_query()

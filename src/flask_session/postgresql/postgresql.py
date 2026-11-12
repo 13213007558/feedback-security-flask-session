@@ -49,6 +49,7 @@ class PostgreSqlSessionInterface(ServerSideSessionInterface):
         table: str = Defaults.SESSION_POSTGRESQL_TABLE,
         schema: str = Defaults.SESSION_POSTGRESQL_SCHEMA,
         cleanup_n_requests: Optional[int] = Defaults.SESSION_CLEANUP_N_REQUESTS,
+        allow_pickle_fallback: Optional[bool] = None,
     ) -> None:
         if not isinstance(pool, ThreadedConnectionPool):
             raise TypeError("No valid ThreadedConnectionPool instance provided.")
@@ -70,6 +71,7 @@ class PostgreSqlSessionInterface(ServerSideSessionInterface):
             sid_length,
             serialization_format,
             cleanup_n_requests,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     @contextmanager

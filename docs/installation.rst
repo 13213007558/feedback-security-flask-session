@@ -21,7 +21,10 @@ Redis is the recommended storage type for Flask-Session, as it has the most comp
 
 .. warning::
 
-  Flask-Session versions below 1.0.0 (not yet released), use pickle_ as the default serializer, which may have security implications in production if your storage is ever compromised.
+  Online session reads use the safe msgspec serializer by default. Historical
+  pickle records are rejected unless ``SESSION_ALLOW_PICKLE_FALLBACK`` is
+  explicitly enabled for a temporary migration window. See
+  :ref:`legacy-pickle` for the offline migration path.
 
 
 Available storage options

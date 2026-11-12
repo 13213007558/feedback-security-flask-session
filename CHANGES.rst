@@ -1,3 +1,20 @@
+0.9.0 (unreleased)
+------------------
+
+Changed
+~~~~~~~
+-   Online session reads no longer fall back to ``pickle`` by default. Only the
+    configured safe serialization format and its msgspec alternate are accepted.
+    Add ``SESSION_ALLOW_PICKLE_FALLBACK = True`` for an explicit temporary
+    compatibility window; only inert plain-dictionary pickle records are read.
+-   Add ``flask_session.migration.migrate_trusted_sessions`` for offline
+    conversion of caller-supplied trusted legacy records. Migration does not
+    write to or delete from storage, and preserves failed records.
+-   Leave unreadable stored session records in place instead of treating them as
+    a removable empty session; the current request proceeds with a fresh
+    session.
+
+
 0.8.0 - 2024-03-26
 ------------------
 

@@ -59,6 +59,22 @@ These are specific to Flask-Session.
 
    .. versionadded:: 0.7.0
 
+.. py:data:: SESSION_ALLOW_PICKLE_FALLBACK
+
+   Explicitly enable reading historical pickle session records. This is
+   disabled by default; online reads otherwise accept only the configured safe
+   serialization format and its msgspec alternate. When enabled, only inert
+   plain-dictionary pickle payloads are accepted, and unreadable records are
+   left in storage.
+
+   Prefer the offline API
+   :func:`flask_session.migration.migrate_trusted_sessions` for records that
+   the caller has explicitly obtained and trusted.
+
+   Default: ``False``
+
+   .. versionadded:: 0.9.0
+
 .. deprecated:: 0.7.0
     ``SESSION_USE_SIGNER``
 

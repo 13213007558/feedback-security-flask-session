@@ -9,6 +9,7 @@ class Defaults:
     SESSION_PERMANENT = True
     SESSION_ID_LENGTH = 32
     SESSION_SERIALIZATION_FORMAT = "msgpack"
+    SESSION_ALLOW_PICKLE_FALLBACK = False
 
     # Clean up settings for non TTL backends (SQL, PostgreSQL, etc.)
     SESSION_CLEANUP_N_REQUESTS = None

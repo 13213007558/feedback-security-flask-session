@@ -14,6 +14,11 @@ Anything documented here is part of the public API that Flask-Session provides, 
 .. autoclass:: flask_session.base.ServerSideSessionInterface
    :members: regenerate
 
+.. autoclass:: flask_session.base.MsgSpecSerializer
+
+.. automodule:: flask_session.migration
+   :members: migrate_trusted_sessions, TrustedSessionRecord, MigrationReport, MigrationResult
+
 .. autoclass:: flask_session.redis.RedisSessionInterface
 .. autoclass:: flask_session.memcached.MemcachedSessionInterface
 .. autoclass:: flask_session.filesystem.FileSystemSessionInterface

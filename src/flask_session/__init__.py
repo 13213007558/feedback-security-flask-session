@@ -1,6 +1,6 @@
 from .defaults import Defaults
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 
 class Session:
@@ -56,6 +56,9 @@ class Session:
         SESSION_ID_LENGTH = config.get("SESSION_ID_LENGTH", Defaults.SESSION_ID_LENGTH)
         SESSION_SERIALIZATION_FORMAT = config.get(
             "SESSION_SERIALIZATION_FORMAT", Defaults.SESSION_SERIALIZATION_FORMAT
+        )
+        SESSION_ALLOW_PICKLE_FALLBACK = config.get(
+            "SESSION_ALLOW_PICKLE_FALLBACK", Defaults.SESSION_ALLOW_PICKLE_FALLBACK
         )
 
         # Redis settings
@@ -133,6 +136,7 @@ class Session:
             "permanent": SESSION_PERMANENT,
             "sid_length": SESSION_ID_LENGTH,
             "serialization_format": SESSION_SERIALIZATION_FORMAT,
+            "allow_pickle_fallback": SESSION_ALLOW_PICKLE_FALLBACK,
         }
 
         SESSION_TYPE = SESSION_TYPE.lower()
@@ -212,3 +216,19 @@ class Session:
             raise ValueError(f"Unrecognized value for SESSION_TYPE: {SESSION_TYPE}")
 
         return session_interface
+
+
+from .migration import (  # noqa: E402
+    MigrationReport,
+    MigrationResult,
+    TrustedSessionRecord,
+    migrate_trusted_sessions,
+)
+
+__all__ = [
+    "Session",
+    "MigrationReport",
+    "MigrationResult",
+    "TrustedSessionRecord",
+    "migrate_trusted_sessions",
+]

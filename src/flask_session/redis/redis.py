@@ -46,6 +46,7 @@ class RedisSessionInterface(ServerSideSessionInterface):
         permanent: bool = Defaults.SESSION_PERMANENT,
         sid_length: int = Defaults.SESSION_ID_LENGTH,
         serialization_format: str = Defaults.SESSION_SERIALIZATION_FORMAT,
+        allow_pickle_fallback: Optional[bool] = None,
     ):
         if client is None or not isinstance(client, Redis):
             warnings.warn(
@@ -56,7 +57,13 @@ class RedisSessionInterface(ServerSideSessionInterface):
             client = Redis()
         self.client = client
         super().__init__(
-            app, key_prefix, use_signer, permanent, sid_length, serialization_format
+            app,
+            key_prefix,
+            use_signer,
+            permanent,
+            sid_length,
+            serialization_format,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     def _retrieve_session_data(self, store_id: str) -> Optional[dict]:

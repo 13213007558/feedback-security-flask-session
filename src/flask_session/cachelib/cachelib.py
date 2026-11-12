@@ -37,6 +37,7 @@ class CacheLibSessionInterface(ServerSideSessionInterface):
         permanent: bool = Defaults.SESSION_PERMANENT,
         sid_length: int = Defaults.SESSION_ID_LENGTH,
         serialization_format: str = Defaults.SESSION_SERIALIZATION_FORMAT,
+        allow_pickle_fallback: Optional[bool] = None,
     ):
 
         if client is None:
@@ -49,8 +50,22 @@ class CacheLibSessionInterface(ServerSideSessionInterface):
 
         self.cache = client
 
+        # CacheLib does not pass the Flask app to the base interface, so resolve
+        # this setting here when callers construct the interface directly.
+        if allow_pickle_fallback is None and app is not None:
+            allow_pickle_fallback = app.config.get(
+                "SESSION_ALLOW_PICKLE_FALLBACK",
+                Defaults.SESSION_ALLOW_PICKLE_FALLBACK,
+            )
+
         super().__init__(
-            None, key_prefix, use_signer, permanent, sid_length, serialization_format
+            None,
+            key_prefix,
+            use_signer,
+            permanent,
+            sid_length,
+            serialization_format,
+            allow_pickle_fallback=allow_pickle_fallback,
         )
 
     def _retrieve_session_data(self, store_id: str) -> Optional[dict]:

@@ -1,16 +1,11 @@
+import pickle
+import pickletools
+import random
 import secrets
 import warnings
 from abc import ABC, abstractmethod
-from contextlib import suppress
-
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
-
-import random
 from datetime import timedelta as TimeDelta
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import msgspec
 from flask import Flask, Request, Response
@@ -21,6 +16,115 @@ from werkzeug.datastructures import CallbackDict
 
 from ._utils import retry_query
 from .defaults import Defaults
+
+
+class SessionDeserializationError(pickle.UnpicklingError):
+    """Raised when stored session data cannot be read using an approved format."""
+
+
+# Legacy pickle records may only contain the plain container and scalar types
+# produced by ``pickle.dumps(dict(session))``. An allowlist is used so opcodes
+# that can import names, call code, or restore persistent objects are rejected
+# before the legacy decoder is invoked.
+_SAFE_LEGACY_PICKLE_OPCODES = frozenset(
+    {
+        "PROTO",
+        "FRAME",
+        "STOP",
+        "MARK",
+        "POP",
+        "POP_MARK",
+        "DUP",
+        "GET",
+        "BINGET",
+        "LONG_BINGET",
+        "PUT",
+        "BINPUT",
+        "LONG_BINPUT",
+        "MEMOIZE",
+        "EMPTY_DICT",
+        "DICT",
+        "SETITEM",
+        "SETITEMS",
+        "EMPTY_LIST",
+        "APPEND",
+        "APPENDS",
+        "EMPTY_TUPLE",
+        "TUPLE",
+        "TUPLE1",
+        "TUPLE2",
+        "TUPLE3",
+        "EMPTY_SET",
+        "ADDITEMS",
+        "FROZENSET",
+        "NONE",
+        "NEWTRUE",
+        "NEWFALSE",
+        "INT",
+        "BININT",
+        "BININT1",
+        "BININT2",
+        "LONG",
+        "LONG1",
+        "LONG4",
+        "FLOAT",
+        "BINFLOAT",
+        "STRING",
+        "BINSTRING",
+        "SHORT_BINSTRING",
+        "BINBYTES",
+        "SHORT_BINBYTES",
+        "BINBYTES8",
+        "BYTEARRAY8",
+        "UNICODE",
+        "SHORT_BINUNICODE",
+        "BINUNICODE",
+        "BINUNICODE8",
+    }
+)
+
+
+def _is_safe_legacy_pickle(serialized_data: bytes) -> bool:
+    """Return whether ``serialized_data`` is an inert pickle of plain data.
+
+    The check uses :mod:`pickletools`, which parses opcodes without executing
+    them. It intentionally is not a general-purpose pickle allowlist: only the
+    shape written by Flask-Session's historical ``dict(session)`` records is
+    accepted.
+    """
+    if not serialized_data:
+        return False
+
+    saw_stop = False
+    saw_dict = False
+    last_position = 0
+    try:
+        for opcode, _argument, position in pickletools.genops(serialized_data):
+            if opcode.name not in _SAFE_LEGACY_PICKLE_OPCODES:
+                return False
+            if opcode.name in {"EMPTY_DICT", "DICT"}:
+                saw_dict = True
+            last_position = position
+            if opcode.name == "STOP":
+                saw_stop = True
+                break
+    except Exception:
+        return False
+
+    if not (saw_stop and saw_dict):
+        return False
+
+    # ``pickletools.genops`` stops at the first STOP and does not report
+    # trailing bytes. ``pickle.loads`` also ignores them, so reject any payload
+    # with extra data instead of silently trusting a truncated prefix.
+    stop_opcode_length = 1  # len(".")
+    return last_position + stop_opcode_length >= len(serialized_data)
+
+
+def _default_legacy_pickle_decoder(serialized_data: bytes) -> Any:
+    # Kept as a module-level indirection so callers and tests can observe or
+    # replace the legacy decoder without changing any other decoding path.
+    return pickle.loads(serialized_data)
 
 
 class ServerSideSession(CallbackDict, SessionMixin):
@@ -109,11 +213,25 @@ class Serializer(ABC):
 
 
 class MsgSpecSerializer(Serializer):
-    def __init__(self, app: Flask, format: str):
+    def __init__(
+        self,
+        app: Flask,
+        format: str,
+        allow_pickle_fallback: Optional[bool] = None,
+        legacy_decoder: Optional[Callable[[bytes], Any]] = None,
+    ):
         self.app: Flask = app
         self.encoder: msgspec.msgpack.Encoder or msgspec.json.Encoder
         self.decoder: msgspec.msgpack.Decoder or msgspec.json.Decoder
         self.alternate_decoder: msgspec.msgpack.Decoder or msgspec.json.Decoder
+        if allow_pickle_fallback is None:
+            allow_pickle_fallback = Defaults.SESSION_ALLOW_PICKLE_FALLBACK
+            if app is not None:
+                allow_pickle_fallback = app.config.get(
+                    "SESSION_ALLOW_PICKLE_FALLBACK", allow_pickle_fallback
+                )
+        self.allow_pickle_fallback = allow_pickle_fallback
+        self.legacy_decoder = legacy_decoder or _default_legacy_pickle_decoder
 
         if format == "msgpack":
             self.encoder = msgspec.msgpack.Encoder()
@@ -135,17 +253,44 @@ class MsgSpecSerializer(Serializer):
             raise
 
     def loads(self, serialized_data: bytes) -> dict:
-        """Deserialize the session data."""
-        # TODO: Remove the pickle fallback in 1.0.0
-        with suppress(msgspec.DecodeError):
-            return self.decoder.decode(serialized_data)
-        with suppress(msgspec.DecodeError):
-            return self.alternate_decoder.decode(serialized_data)
-        with suppress(pickle.UnpicklingError):
-            return pickle.loads(serialized_data)
-        # If all decoders fail, raise the final exception
-        self.app.logger.error("Failed to deserialize session data", exc_info=True)
-        raise pickle.UnpicklingError("Failed to deserialize session data")
+        """Deserialize stored session data using only approved formats.
+
+        Safe formats are attempted in order. Legacy pickle data is considered
+        only when ``allow_pickle_fallback`` was explicitly enabled, and only
+        after the payload has been verified to be an inert plain-data pickle.
+        A payload that reaches the legacy step is never retried with a safe
+        decoder afterward.
+        """
+        try:
+            decoded = self.decoder.decode(serialized_data)
+        except msgspec.DecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            return decoded
+
+        try:
+            decoded = self.alternate_decoder.decode(serialized_data)
+        except msgspec.DecodeError:
+            decoded = None
+        if isinstance(decoded, dict):
+            return decoded
+
+        # Only a structurally verified plain-dict pickle may reach the legacy
+        # decoder. The verification itself never executes the payload.
+        if self.allow_pickle_fallback and _is_safe_legacy_pickle(serialized_data):
+            try:
+                decoded = self.legacy_decoder(serialized_data)
+            except Exception:
+                self.app.logger.warning(
+                    "Failed to decode an approved legacy pickle session record.",
+                    exc_info=True,
+                )
+                decoded = None
+            if isinstance(decoded, dict):
+                return decoded
+
+        self.app.logger.error("Failed to deserialize session data")
+        raise SessionDeserializationError("Failed to deserialize session data")
 
 
 class ServerSideSessionInterface(FlaskSessionInterface, ABC):
@@ -164,6 +309,8 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         sid_length: int = Defaults.SESSION_ID_LENGTH,
         serialization_format: str = Defaults.SESSION_SERIALIZATION_FORMAT,
         cleanup_n_requests: Optional[int] = Defaults.SESSION_CLEANUP_N_REQUESTS,
+        allow_pickle_fallback: Optional[bool] = None,
+        legacy_decoder: Optional[Callable[[bytes], Any]] = None,
     ):
         self.app = app
         self.key_prefix = key_prefix
@@ -188,7 +335,12 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
                 self._register_cleanup_app_command()
 
         # Set the serialization format
-        self.serializer = MsgSpecSerializer(format=serialization_format, app=app)
+        self.serializer = MsgSpecSerializer(
+            format=serialization_format,
+            app=app,
+            allow_pickle_fallback=allow_pickle_fallback,
+            legacy_decoder=legacy_decoder,
+        )
 
     # INTERNAL METHODS
 
@@ -330,6 +482,13 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         response.vary.add("Cookie")
 
     def open_session(self, app: Flask, request: Request) -> ServerSideSession:
+        """Open a session, failing safely when stored data is unreadable.
+
+        An unreadable stored value yields a fresh session with a new id. The
+        stored record is not deleted, so an operator can inspect or migrate it
+        offline. This also prevents a concurrent read from silently treating
+        the corrupt session as empty.
+        """
         # Get the session ID from the cookie
         sid = request.cookies.get(app.config["SESSION_COOKIE_NAME"])
 
@@ -347,15 +506,23 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
 
         # Retrieve the session data from the database
         store_id = self._get_store_id(sid)
-        saved_session_data = self._retrieve_session_data(store_id)
+        try:
+            saved_session_data = self._retrieve_session_data(store_id)
+        except SessionDeserializationError:
+            saved_session_data = None
 
         # If the saved session exists, load the session data from the document
-        if saved_session_data is not None:
-            return self.session_class(saved_session_data, sid=sid)
+        if not isinstance(saved_session_data, dict):
+            if saved_session_data is not None:
+                app.logger.warning(
+                    "Ignoring unreadable session data for %s; the stored "
+                    "record was left in place for offline migration.",
+                    store_id,
+                )
+            sid = self._generate_sid(self.sid_length)
+            return self.session_class(sid=sid, permanent=self.permanent)
 
-        # If the saved session does not exist, create a new session
-        sid = self._generate_sid(self.sid_length)
-        return self.session_class(sid=sid, permanent=self.permanent)
+        return self.session_class(saved_session_data, sid=sid)
 
     # METHODS TO BE IMPLEMENTED BY SUBCLASSES
 
