@@ -10,6 +10,7 @@ Table of Contents
     config_guide
     config_reference
     security
+    retry_contract
     api
     contributing
     license

@@ -10,7 +10,6 @@ from psycopg2.extensions import connection as PsycoPg2Connection
 from psycopg2.extensions import cursor as PsycoPg2Cursor
 from psycopg2.pool import ThreadedConnectionPool
 
-from .._utils import retry_query
 from ..base import ServerSideSession, ServerSideSessionInterface
 from ..defaults import Defaults
 from ._queries import Queries
@@ -87,27 +86,24 @@ class PostgreSqlSessionInterface(ServerSideSessionInterface):
         finally:
             self.pool.putconn(_conn)
 
-    @retry_query(max_attempts=3)
     def _create_schema_and_table(self) -> None:
         with self._get_cursor() as cur:
             cur.execute(self._queries.create_schema)
             cur.execute(self._queries.create_table)
 
-    def _delete_expired_sessions(self) -> None:
+    def _delete_expired_sessions_impl(self) -> None:
         """Delete all expired sessions from the database."""
         with self._get_cursor() as cur:
             cur.execute(self._queries.delete_expired_sessions)
 
-    @retry_query(max_attempts=3)
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         with self._get_cursor() as cur:
             cur.execute(
                 self._queries.delete_session,
                 dict(session_id=store_id),
             )
 
-    @retry_query(max_attempts=3)
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         with self._get_cursor() as cur:
             cur.execute(
                 self._queries.retrieve_session_data,
@@ -120,8 +116,7 @@ class PostgreSqlSessionInterface(ServerSideSessionInterface):
             return self.serializer.loads(serialized_session_data)
         return None
 
-    @retry_query(max_attempts=3)
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
 

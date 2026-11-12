@@ -86,14 +86,14 @@ class FileSystemSessionInterface(ServerSideSessionInterface):
             app, key_prefix, use_signer, permanent, sid_length, serialization_format
         )
 
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         # Get the saved session (item) from the database
         return self.cache.get(store_id)
 
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         self.cache.delete(store_id)
 
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
         storage_time_to_live = total_seconds(session_lifetime)

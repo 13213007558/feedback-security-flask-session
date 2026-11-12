@@ -141,7 +141,7 @@ class DynamoDBSessionInterface(ServerSideSessionInterface):
             # TTL already exists, or table already exists
             pass
 
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         # Get the saved session (document) from the database
         document = self.store.get_item(Key={"id": store_id}).get("Item")
         session_is_not_expired = Decimal(datetime.utcnow().timestamp()) <= document.get(
@@ -152,10 +152,10 @@ class DynamoDBSessionInterface(ServerSideSessionInterface):
             return self.serializer.loads(serialized_session_data)
         return None
 
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         self.store.delete_item(Key={"id": store_id})
 
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
         storage_expiration_datetime = datetime.utcnow() + session_lifetime

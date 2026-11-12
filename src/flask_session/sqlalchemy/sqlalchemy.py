@@ -8,9 +8,9 @@ from flask_sqlalchemy import SQLAlchemy
 from itsdangerous import want_bytes
 from sqlalchemy import Column, DateTime, Integer, LargeBinary, Sequence, String
 
-from .._utils import retry_query
 from ..base import ServerSideSession, ServerSideSessionInterface
 from ..defaults import Defaults
+from ..exceptions import AmbiguousSessionStateError, RetriableSessionError
 
 
 class SqlAlchemySession(ServerSideSession):
@@ -121,19 +121,49 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
             cleanup_n_requests,
         )
 
-    @retry_query()
-    def _delete_expired_sessions(self) -> None:
+    def _classify_write_error(
+        self, store_id: str, operation: str, committed: bool, exc: Exception
+    ) -> Exception:
+        """Map a DBAPI failure relative to the commit point onto the retry contract.
+
+        A failure while ``committed`` is False happened before the commit was
+        issued, so the rollback leaves storage untouched: a connection/timeout
+        (``OperationalError``) is retriable, any other SQL error is definite
+        and propagates. Once the commit has been issued the result is unknown
+        and must surface as ambiguous rather than be retried blindly.
+        """
+        from sqlalchemy.exc import OperationalError
+
+        self.client.session.rollback()
+        if committed:
+            return AmbiguousSessionStateError(operation, store_id, exc)
+        if isinstance(exc, OperationalError):
+            return RetriableSessionError(str(exc))
+        return exc
+
+    def _commit_or_classify(self, store_id: str, operation: str) -> None:
+        """Commit, translating a commit-phase failure into an ambiguous result."""
+        try:
+            self.client.session.commit()
+        except Exception as exc:
+            raise self._classify_write_error(
+                store_id, operation, committed=True, exc=exc
+            ) from exc
+
+    def _delete_expired_sessions_impl(self) -> None:
         try:
             self.client.session.query(self.sql_session_model).filter(
                 self.sql_session_model.expiry <= datetime.utcnow()
             ).delete(synchronize_session=False)
-            self.client.session.commit()
-        except Exception:
-            self.client.session.rollback()
+            self._commit_or_classify("*", "cleanup")
+        except (AmbiguousSessionStateError, RetriableSessionError):
             raise
+        except Exception as exc:
+            raise self._classify_write_error(
+                "*", "cleanup", committed=False, exc=exc
+            ) from exc
 
-    @retry_query()
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         # Get the saved session (record) from the database
         record = self.sql_session_model.query.filter_by(session_id=store_id).first()
 
@@ -141,10 +171,13 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
         if record and (record.expiry is None or record.expiry <= datetime.utcnow()):
             try:
                 self.client.session.delete(record)
-                self.client.session.commit()
-            except Exception:
-                self.client.session.rollback()
+                self._commit_or_classify(store_id, "delete")
+            except (AmbiguousSessionStateError, RetriableSessionError):
                 raise
+            except Exception as exc:
+                raise self._classify_write_error(
+                    store_id, "delete", committed=False, exc=exc
+                ) from exc
             record = None
 
         if record:
@@ -152,17 +185,18 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
             return self.serializer.loads(serialized_session_data)
         return None
 
-    @retry_query()
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         try:
             self.sql_session_model.query.filter_by(session_id=store_id).delete()
-            self.client.session.commit()
-        except Exception:
-            self.client.session.rollback()
+            self._commit_or_classify(store_id, "delete")
+        except (AmbiguousSessionStateError, RetriableSessionError):
             raise
+        except Exception as exc:
+            raise self._classify_write_error(
+                store_id, "delete", committed=False, exc=exc
+            ) from exc
 
-    @retry_query()
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
         storage_expiration_datetime = datetime.utcnow() + session_lifetime
@@ -183,7 +217,12 @@ class SqlAlchemySessionInterface(ServerSideSessionInterface):
                     expiry=storage_expiration_datetime,
                 )
                 self.client.session.add(record)
-            self.client.session.commit()
-        except Exception:
-            self.client.session.rollback()
+            self._commit_or_classify(store_id, "upsert")
+        except (AmbiguousSessionStateError, RetriableSessionError):
             raise
+        except Exception as exc:
+            # Pre-commit failure: the rollback inside the helper guarantees
+            # nothing was made durable, so a transient error can be retried.
+            raise self._classify_write_error(
+                store_id, "upsert", committed=False, exc=exc
+            ) from exc

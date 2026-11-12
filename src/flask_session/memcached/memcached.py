@@ -96,17 +96,17 @@ class MemcachedSessionInterface(ServerSideSessionInterface):
             timeout += int(time.time())
         return timeout
 
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         # Get the saved session (item) from the database
         serialized_session_data = self.client.get(store_id)
         if serialized_session_data:
             return self.serializer.loads(serialized_session_data)
         return None
 
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         self.client.delete(store_id)
 
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
         storage_time_to_live = total_seconds(session_lifetime)

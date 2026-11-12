@@ -260,14 +260,22 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
 
     def regenerate(self, session: ServerSideSession) -> None:
         """Regenerate the session id for the given session. Can be used by calling ``flask.session_interface.regenerate()``."""
-        if session:
-            # Remove the old session from storage
-            self._delete_session(self._get_store_id(session.sid))
-            # Generate a new session ID
-            new_sid = self._generate_sid(self.sid_length)
-            session.sid = new_sid
-            # Mark the session as modified to ensure it gets saved
-            session.modified = True
+        if not session:
+            return
+
+        old_store_id = self._get_store_id(session.sid)
+        # Remove the old session from storage first. If the deletion cannot be
+        # confirmed (transient failures exhausted or an ambiguous post-commit
+        # timeout), keep the current sid and surface the error instead of
+        # minting a new identity. Rotating the cookie while the old record may
+        # still be authenticated would leave a fixated session behind.
+        self._delete_session(old_store_id)
+
+        # The old identity is gone for certain: only now generate a new sid,
+        # which guarantees the next request cannot fall back onto the old one.
+        session.sid = self._generate_sid(self.sid_length)
+        # Mark the session as modified to ensure it gets saved
+        session.modified = True
 
     # METHODS OVERRIDE FLASK SESSION INTERFACE
 
@@ -293,6 +301,10 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         if not session:
             # If the session was deleted (empty and modified), delete the saved session  from the database and tell the client to delete the cookie
             if session.modified:
+                # If the deletion is ambiguous (the backend may or may not have
+                # removed the record) let the exception propagate: telling the
+                # browser to drop its cookie while the server record may still
+                # be valid would silently keep an authenticated login alive.
                 self._delete_session(store_id)
                 response.delete_cookie(key=name, domain=domain, path=path)
                 response.vary.add("Cookie")
@@ -301,7 +313,9 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         if not self.should_set_storage(app, session):
             return
 
-        # Update existing or create new session in the database
+        # Update existing or create new session in the database. Let a failed
+        # or ambiguous upsert propagate before any cookie is emitted, so a
+        # browser is never pointed at a session whose save result is unknown.
         self._upsert_session(app.permanent_session_lifetime, session, store_id)
 
         if not self.should_set_cookie(app, session):
@@ -357,29 +371,51 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         sid = self._generate_sid(self.sid_length)
         return self.session_class(sid=sid, permanent=self.permanent)
 
-    # METHODS TO BE IMPLEMENTED BY SUBCLASSES
+    # STORAGE PRIMITIVES IMPLEMENTED BY SUBCLASSES
+    #
+    # These are abstract on purpose and carry no decorator: decorating an
+    # abstractmethod is ineffective because every concrete subclass replaces
+    # the decorated object. Retry behaviour lives once, on the non-abstract
+    # public wrappers below (the template method pattern), so every backend
+    # gets the exact same decidable retry contract.
 
     @abstractmethod
-    @retry_query()  # use only when retry not supported directly by the client
-    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+    def _retrieve_session_data_impl(self, store_id: str) -> Optional[dict]:
         """Get the saved session from the session storage."""
         raise NotImplementedError()
 
     @abstractmethod
-    @retry_query()  # use only when retry not supported directly by the client
-    def _delete_session(self, store_id: str) -> None:
+    def _delete_session_impl(self, store_id: str) -> None:
         """Delete session from the session storage."""
         raise NotImplementedError()
 
     @abstractmethod
-    @retry_query()  # use only when retry not supported directly by the client
-    def _upsert_session(
+    def _upsert_session_impl(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
     ) -> None:
         """Update existing or create new session in the session storage."""
         raise NotImplementedError()
 
-    @retry_query()  # use only when retry not supported directly by the client
-    def _delete_expired_sessions(self) -> None:
+    def _delete_expired_sessions_impl(self) -> None:
         """Delete expired sessions from the session storage. Only required for non-TTL databases."""
         pass
+
+    # PUBLIC STORAGE ENTRY POINTS (single place that applies the retry contract)
+
+    @retry_query(operation="retrieve", idempotent=True)
+    def _retrieve_session_data(self, store_id: str) -> Optional[dict]:
+        return self._retrieve_session_data_impl(store_id)
+
+    @retry_query(operation="delete", idempotent=True)
+    def _delete_session(self, store_id: str) -> None:
+        self._delete_session_impl(store_id)
+
+    @retry_query(operation="upsert", idempotent=True)
+    def _upsert_session(
+        self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
+    ) -> None:
+        self._upsert_session_impl(session_lifetime, session, store_id)
+
+    @retry_query(operation="cleanup", idempotent=True)
+    def _delete_expired_sessions(self) -> None:
+        self._delete_expired_sessions_impl()

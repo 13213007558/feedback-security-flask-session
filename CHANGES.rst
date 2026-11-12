@@ -1,3 +1,24 @@
+Unreleased
+----------
+
+Fixed
+~~~~~
+-   Replace the blanket storage retry with a decidable contract. Driver
+    failures are classified as pre-commit (``RetriableSessionError``, retried
+    with a bounded backoff) or post-commit/unknown
+    (``AmbiguousSessionStateError``, only replayed for idempotent operations
+    and never hidden behind an unbounded loop); definite errors are never
+    retried.
+-   Fix retry being silently disabled on most backends: decorating an
+    ``abstractmethod`` was overridden by concrete subclasses. Retry now lives
+    once on non-abstract wrapper methods that call ``_*_impl`` primitives,
+    which also removes the previous double-decoration (up to 9 attempts) on
+    the SQL backends.
+-   Harden ``regenerate`` and ``save_session`` so a new session id/cookie is
+    never issued while the old record's deletion or the save result is
+    unconfirmed, preventing session fixation and the resurrection of a deleted
+    authenticated login.
+
 0.8.0 - 2024-03-26
 ------------------
 

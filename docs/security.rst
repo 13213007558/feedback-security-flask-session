@@ -53,3 +53,10 @@ As one tool among others that can mitigate session fixation, is regenerating the
 .. _MDN: https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
 .. _OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
 .. _Flask-Talisman: https://github.com/wntrblm/flask-talisman
+Retry behaviour
+---------------
+
+Storage retries for saves, deletes and rotation follow a decidable contract that
+distinguishes a pre-commit failure (safe to retry) from a post-commit timeout
+(unknown outcome). See :doc:`retry_contract` for the full rules and the backend
+implementation guide.
