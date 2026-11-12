@@ -9,6 +9,8 @@ Configuration Guide
 
 .. include:: config_exceptions.rst
 
+.. include:: config_cutover.rst
+
 .. include:: config_serialization.rst
 
 .. include:: config_flask.rst

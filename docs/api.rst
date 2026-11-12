@@ -18,6 +18,11 @@ Anything documented here is part of the public API that Flask-Session provides, 
 .. autoclass:: flask_session.memcached.MemcachedSessionInterface
 .. autoclass:: flask_session.filesystem.FileSystemSessionInterface
 .. autoclass:: flask_session.cachelib.CacheLibSessionInterface
+.. autoclass:: flask_session.migration.CutoverSessionInterface
+   :members: set_phase
+.. autoclass:: flask_session.migration.CutoverError
+.. autoclass:: flask_session.migration.AuthorityUnconfirmed
+.. autofunction:: flask_session.migration.register_cutover_error_handlers
 .. autoclass:: flask_session.mongodb.MongoDBSessionInterface
 .. autoclass:: flask_session.sqlalchemy.SqlAlchemySessionInterface
 .. autoclass:: flask_session.dynamodb.DynamoDBSessionInterface

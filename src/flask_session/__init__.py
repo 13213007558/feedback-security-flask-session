@@ -67,6 +67,28 @@ class Session:
         # CacheLib settings
         SESSION_CACHELIB = config.get("SESSION_CACHELIB", Defaults.SESSION_CACHELIB)
 
+        # Cutover (storage migration) settings
+        SESSION_CUTOVER_NEW = config.get(
+            "SESSION_CUTOVER_NEW", Defaults.SESSION_CUTOVER_NEW
+        )
+        SESSION_CUTOVER_LEGACY = config.get(
+            "SESSION_CUTOVER_LEGACY", Defaults.SESSION_CUTOVER_LEGACY
+        )
+        SESSION_CUTOVER_PHASE = config.get(
+            "SESSION_CUTOVER_PHASE", Defaults.SESSION_CUTOVER_PHASE
+        )
+        SESSION_CUTOVER_PHASE_KEY = config.get(
+            "SESSION_CUTOVER_PHASE_KEY", Defaults.SESSION_CUTOVER_PHASE_KEY
+        )
+        SESSION_CUTOVER_IDENTITY_KEYS = config.get(
+            "SESSION_CUTOVER_IDENTITY_KEYS",
+            Defaults.SESSION_CUTOVER_IDENTITY_KEYS,
+        )
+        SESSION_CUTOVER_TOMBSTONE_TIMEOUT = config.get(
+            "SESSION_CUTOVER_TOMBSTONE_TIMEOUT",
+            Defaults.SESSION_CUTOVER_TOMBSTONE_TIMEOUT,
+        )
+
         # Filesystem settings
         # TODO: remove in 1.0
         SESSION_FILE_DIR = config.get("SESSION_FILE_DIR", Defaults.SESSION_FILE_DIR)
@@ -165,6 +187,18 @@ class Session:
 
             session_interface = CacheLibSessionInterface(
                 **common_params, client=SESSION_CACHELIB
+            )
+        elif SESSION_TYPE == "cutover":
+            from .migration import CutoverSessionInterface
+
+            session_interface = CutoverSessionInterface(
+                **common_params,
+                new_backend=SESSION_CUTOVER_NEW,
+                legacy_backend=SESSION_CUTOVER_LEGACY,
+                phase=SESSION_CUTOVER_PHASE,
+                phase_key=SESSION_CUTOVER_PHASE_KEY,
+                identity_keys=frozenset(SESSION_CUTOVER_IDENTITY_KEYS),
+                tombstone_timeout=SESSION_CUTOVER_TOMBSTONE_TIMEOUT,
             )
         elif SESSION_TYPE == "mongodb":
             from .mongodb import MongoDBSessionInterface

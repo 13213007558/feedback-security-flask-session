@@ -22,6 +22,14 @@ class Defaults:
     # CacheLib settings
     SESSION_CACHELIB = None
 
+    # Cutover (legacy -> new backend migration) settings
+    SESSION_CUTOVER_NEW = None
+    SESSION_CUTOVER_LEGACY = None
+    SESSION_CUTOVER_PHASE = "cutover"
+    SESSION_CUTOVER_PHASE_KEY = "session_cutover:phase"
+    SESSION_CUTOVER_IDENTITY_KEYS = ("_user_id", "user_id")
+    SESSION_CUTOVER_TOMBSTONE_TIMEOUT = None
+
     # Filesystem settings
     # TODO: remove in 1.0
     SESSION_FILE_DIR = os.path.join(os.getcwd(), "flask_session")

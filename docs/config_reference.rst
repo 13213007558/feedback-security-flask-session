@@ -16,6 +16,7 @@ These are specific to Flask-Session.
    - **memcached**: MemcachedSessionInterface
    - **filesystem**: FileSystemSessionInterface (Deprecated in 0.7.0, will be removed in 1.0.0 in favor of CacheLibSessionInterface)
    - **cachelib**: CacheLibSessionInterface
+   - **cutover**: CutoverSessionInterface (recoverable legacy-to-new migration)
    - **mongodb**: MongoDBSessionInterface
    - **sqlalchemy**: SqlAlchemySessionInterface
    - **dynamodb**: DynamoDBSessionInterface
@@ -137,6 +138,43 @@ CacheLib
       A ``default_timeout`` set in any of the ``CacheLib`` backends will be overrode by the ``PERMANENT_SESSION_LIFETIME`` when each stored session's expiry is set.
    
    Default: ``FileSystemCache`` in ``./flask_session`` directory.
+
+Cutover (storage migration)
+~~~~~~~~~~~~~~~~~~~~~~~
+
+See :doc:`config_cutover` for the full recoverable migration protocol.
+
+.. py:data:: SESSION_CUTOVER_NEW
+
+   The new (target) session backend instance. Required when ``SESSION_TYPE`` is ``"cutover"``.
+
+.. py:data:: SESSION_CUTOVER_LEGACY
+
+   The old session backend instance, kept readable during the transition. Required when ``SESSION_TYPE`` is ``"cutover"``.
+
+.. py:data:: SESSION_CUTOVER_PHASE
+
+   Initial cutover phase, one of ``"legacy"``, ``"cutover"`` or ``"new_only"``. The durable phase marker in the new backend takes precedence after the first write.
+
+   Default: ``"cutover"``
+
+.. py:data:: SESSION_CUTOVER_PHASE_KEY
+
+   Key under which the durable phase marker is stored.
+
+   Default: ``"session_cutover:phase"``
+
+.. py:data:: SESSION_CUTOVER_IDENTITY_KEYS
+
+   Session keys whose add, removal, or change is treated as an identity change requiring a confirmed authoritative backend.
+
+   Default: ``("_user_id", "user_id")``
+
+.. py:data:: SESSION_CUTOVER_TOMBSTONE_TIMEOUT
+
+   Lifetime, in seconds, of the tombstone record written on logout. When unset it matches ``PERMANENT_SESSION_LIFETIME``.
+
+   Default: ``None``
 
 MongoDB
 ~~~~~~~~~~~~~~~~~~~~~~~

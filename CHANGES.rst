@@ -1,3 +1,10 @@
+Unreleased
+----------
+
+Added
+~~~~~~~
+-   Add ``cutover`` session interface implementing a recoverable legacy-to-new storage migration protocol. It provides durable, forward-only cutover phases (``legacy``, ``cutover``, ``new_only``), new-first reads with legacy fallback, a single atomically claimed authoritative writer per session, fail-closed rejection of identity changes (``AuthorityUnconfirmed`` → ``409``) when authority cannot be confirmed, and logout tombstones that fence late writes from retired processes.
+
 0.8.0 - 2024-03-26
 ------------------
 
