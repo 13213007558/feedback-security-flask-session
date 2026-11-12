@@ -198,8 +198,23 @@ SqlAlchemy
    Only applicable to non-TTL backends.
    
    The average number of requests after which Flask-Session will perform a session cleanup. This involves removing all session data that is older than ``PERMANENT_SESSION_LIFETIME``. Using the app command ``flask session_cleanup`` instead is preferable.
-   
+
    Default: ``None``
+
+Multi-tenancy
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. py:data:: SESSION_TENANT_FIELD_OWNERSHIP
+
+   Maps session field names to their ownership layer: ``"global"`` fields (user preferences) survive a tenant switch, ``"tenant"`` fields (current-tenant capabilities) are revoked on switch. Used by ``flask_session.tenancy``.
+
+   Default: ``{}``
+
+.. py:data:: SESSION_TENANT_UNKNOWN_FIELD
+
+   How to treat session fields with no configured ownership when switching tenants. ``"tenant"`` revokes them so unknown fields never migrate across tenants by default; ``"error"`` rejects the switch with ``TenantFieldError`` instead.
+
+   Default: ``"tenant"``
 
 Dynamodb
 ~~~~~~~~~~~~~~~~~~~~~~~

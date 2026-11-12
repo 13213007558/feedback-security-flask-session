@@ -49,3 +49,7 @@ class Defaults:
     SESSION_POSTGRESQL = None
     SESSION_POSTGRESQL_TABLE = "flask_sessions"
     SESSION_POSTGRESQL_SCHEMA = "public"
+
+    # Multi-tenancy settings
+    SESSION_TENANT_FIELD_OWNERSHIP = {}
+    SESSION_TENANT_UNKNOWN_FIELD = "tenant"

@@ -11,4 +11,6 @@ Configuration Guide
 
 .. include:: config_serialization.rst
 
+.. include:: config_tenancy.rst
+
 .. include:: config_flask.rst
