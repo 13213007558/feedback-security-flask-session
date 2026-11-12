@@ -5,6 +5,17 @@ Only for SQL based storage, upon an exception, Flask-Session will retry with bac
 
 For other storage types, the retry logic is either included or can be configured in the client setup. Refer to the relevant client documentation for more information.
 
+Session regeneration
+--------------------
+
+:meth:`flask.Flask.session_interface.regenerate` deletes the previous session
+record and verifies that it is no longer readable before accepting the rotation.
+If that check fails, :class:`flask_session.base.SessionRegenerationError` is
+raised. The exception is also raised by ``save_session`` when a rotated session
+cannot be persisted, so a response never carries a cookie for a session record
+that was not stored. Applications should treat this error as a failed login and
+ask the user to retry, rather than continuing with the session.
+
 Redis example with retries on certain errors:
 
 .. code-block:: python

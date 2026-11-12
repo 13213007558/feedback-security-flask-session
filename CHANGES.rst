@@ -9,6 +9,7 @@ Added
 Fixed
 ~~~~~
 -   Include prematurely removed ``cachelib`` dependency. Will be removed in 1.0.0 to be an optional dependency (`#223 <https://github.com/pallets-eco/flask-session/issues/223>`_).
+-   Always rotate the session id in ``regenerate``, including for empty sessions, and fail closed with :class:`flask_session.base.SessionRegenerationError` when the previous record cannot be deleted or verified. A failed save now prevents a session cookie from being issued for an unpersisted session.
 
 
 0.7.0 - 2024-03-18

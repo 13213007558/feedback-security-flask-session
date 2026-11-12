@@ -90,19 +90,19 @@ class FileSystemSessionInterface(ServerSideSessionInterface):
         # Get the saved session (item) from the database
         return self.cache.get(store_id)
 
-    def _delete_session(self, store_id: str) -> None:
-        self.cache.delete(store_id)
+    def _delete_session(self, store_id: str) -> bool:
+        return self.cache.delete(store_id)
 
     def _upsert_session(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
-    ) -> None:
+    ) -> bool:
         storage_time_to_live = total_seconds(session_lifetime)
 
         # Serialize the session data (or just cast into dictionary in this case)
         session_data = dict(session)
 
         # Update existing or create new session in the database
-        self.cache.set(
+        return self.cache.set(
             key=store_id,
             value=session_data,
             timeout=storage_time_to_live,

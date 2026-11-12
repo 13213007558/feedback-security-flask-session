@@ -23,6 +23,17 @@ from ._utils import retry_query
 from .defaults import Defaults
 
 
+class SessionRegenerationError(RuntimeError):
+    """Raised when a session id could not be rotated safely.
+
+    The session id is still changed to a fresh, unused value before this
+    exception is raised. This prevents an application that catches the error
+    from saving the new identity under the old, potentially attacker-known
+    session id. The exception signals that the previous session record could
+    not be removed or verified, not that the old id is still safe to use.
+    """
+
+
 class ServerSideSession(CallbackDict, SessionMixin):
     """Baseclass for server-side based sessions. This can be accessed through ``flask.session``.
 
@@ -70,6 +81,8 @@ class ServerSideSession(CallbackDict, SessionMixin):
 
         CallbackDict.__init__(self, initial, on_update)
         self.sid = sid
+        self._regeneration_failed = False
+        self._rotated = False
         if permanent:
             self.permanent = permanent
         self.modified = False
@@ -92,6 +105,9 @@ class ServerSideSession(CallbackDict, SessionMixin):
         permanent = self.get("_permanent", False)
         super().clear()
         self["_permanent"] = permanent
+        # Clearing after a rotation expresses deletion intent; a later
+        # regenerate() sets this flag again.
+        self._rotated = False
 
 
 class Serializer(ABC):
@@ -259,15 +275,72 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
     # SECURITY API METHODS
 
     def regenerate(self, session: ServerSideSession) -> None:
-        """Regenerate the session id for the given session. Can be used by calling ``flask.session_interface.regenerate()``."""
-        if session:
-            # Remove the old session from storage
-            self._delete_session(self._get_store_id(session.sid))
-            # Generate a new session ID
-            new_sid = self._generate_sid(self.sid_length)
+        """Regenerate the session id for the given session.
+
+        Can be used by calling ``flask.session_interface.regenerate()``,
+        typically right after a successful login to mitigate session fixation.
+
+        The session id is rotated regardless of whether the session currently
+        contains data. This covers flows that clear an anonymous session first
+        and write the authenticated identity afterwards. Calling this method
+        more than once in the same request always produces a different id; ids
+        returned by earlier calls are never persisted and cannot load data.
+
+        The previous record is deleted and its absence is verified. If the
+        backend cannot delete the old record, or still returns data for it
+        afterwards, :class:`SessionRegenerationError` is raised. The session
+        still receives a fresh id before the exception is raised, so a caller
+        that catches the error never saves the new identity under the old id.
+        The new record is written by :meth:`save_session`; therefore a rotation
+        only takes effect once the response is saved successfully.
+        """
+        if session.sid is None:
+            raise SessionRegenerationError(
+                "Cannot regenerate a session that has no session id."
+            )
+
+        old_sid = session.sid
+        previous_store_id = self._get_store_id(old_sid)
+        new_sid = self._generate_sid(self.sid_length)
+
+        if new_sid == old_sid:
+            raise SessionRegenerationError(
+                "The session id generator returned an id that is already in use."
+            )
+
+        # Some backends do not report a delete result and may silently fail.
+        # Treat a reported failure as fatal when a record existed, then verify
+        # the old id cannot load any session data before claiming success.
+        try:
+            had_previous_record = (
+                self._retrieve_session_data(previous_store_id) is not None
+            )
+            deleted = self._delete_session(previous_store_id)
+            if had_previous_record and deleted is False:
+                raise SessionRegenerationError(
+                    "The previous session record could not be deleted."
+                )
+            if self._retrieve_session_data(previous_store_id) is not None:
+                raise SessionRegenerationError(
+                    "The previous session record is still readable after deletion."
+                )
+        except Exception as e:
+            # Keep the fresh id even on failure. If the caller catches the
+            # exception, the new identity must never be written under the old,
+            # potentially attacker-known id.
             session.sid = new_sid
-            # Mark the session as modified to ensure it gets saved
             session.modified = True
+            session._regeneration_failed = True
+            if isinstance(e, SessionRegenerationError):
+                raise
+            raise SessionRegenerationError(
+                "The previous session record could not be deleted or verified."
+            ) from e
+
+        session.sid = new_sid
+        session._regeneration_failed = False
+        session._rotated = True
+        session.modified = True
 
     # METHODS OVERRIDE FLASK SESSION INTERFACE
 
@@ -289,24 +362,70 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         if session.accessed:
             response.vary.add("Cookie")
 
+        if session._regeneration_failed:
+            # A failed rotation must not produce a cookie or a stored record.
+            # The failed login/session setup has to visible as an error instead
+            # of half-completing with a credential the backend could not secure.
+            raise SessionRegenerationError(
+                "The session was not saved because a previous regeneration failed."
+            )
+
         # If the session is empty, do not save it to the database or set a cookie
         if not session:
-            # If the session was deleted (empty and modified), delete the saved session  from the database and tell the client to delete the cookie
-            if session.modified:
+            # A session that was rotated while empty must still bind the client
+            # to the new id. Otherwise the browser keeps sending the old id,
+            # which was deleted, and a later request silently gets a third id.
+            # An empty session has no data worth storing, but the cookie keeps
+            # the rotation visible across requests until the identity is set.
+            if session._rotated:
+                empty_session = self.session_class(
+                    {"_permanent": session.get("_permanent", False)},
+                    sid=session.sid,
+                )
+                success = self._upsert_session(
+                    app.permanent_session_lifetime,
+                    empty_session,
+                    store_id,
+                )
+                if success is False or self._retrieve_session_data(store_id) is None:
+                    raise RuntimeError("The session record could not be saved.")
+                self._set_session_cookie(app, response, session, domain, path, name)
+            elif session.modified:
+                # The session was deleted (empty and modified), delete the saved session from the database and tell the client to delete the cookie
                 self._delete_session(store_id)
                 response.delete_cookie(key=name, domain=domain, path=path)
                 response.vary.add("Cookie")
             return
 
-        if not self.should_set_storage(app, session):
+        if not self.should_set_storage(app, session) and not session._rotated:
             return
 
         # Update existing or create new session in the database
-        self._upsert_session(app.permanent_session_lifetime, session, store_id)
+        upsert_result = self._upsert_session(
+            app.permanent_session_lifetime, session, store_id
+        )
+        if upsert_result is False:
+            # Never send a cookie for a session that was not persisted; doing
+            # so would hand out a credential whose record does not exist.
+            raise RuntimeError("The session record could not be saved.")
 
-        if not self.should_set_cookie(app, session):
+        if session._rotated and self._retrieve_session_data(store_id) is None:
+            raise RuntimeError("The session record could not be verified as saved.")
+
+        if not self.should_set_cookie(app, session) and not session._rotated:
             return
 
+        self._set_session_cookie(app, response, session, domain, path, name)
+
+    def _set_session_cookie(
+        self,
+        app: Flask,
+        response: Response,
+        session: ServerSideSession,
+        domain: Optional[str],
+        path: str,
+        name: str,
+    ) -> None:
         # Get the additional required cookie settings
         value = self._sign(app, session.sid) if self.use_signer else session.sid
         expires = self.get_expiration_time(app, session)
@@ -367,16 +486,27 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
 
     @abstractmethod
     @retry_query()  # use only when retry not supported directly by the client
-    def _delete_session(self, store_id: str) -> None:
-        """Delete session from the session storage."""
+    def _delete_session(self, store_id: str) -> Optional[bool]:
+        """Delete session from the session storage.
+
+        Returns ``True`` when the record is known to be deleted, ``False`` when
+        the backend reports that deletion failed, and ``None`` when the backend
+        does not report a result. ``regenerate`` verifies deletion by reading
+        the old record after this call regardless of the return value.
+        """
         raise NotImplementedError()
 
     @abstractmethod
     @retry_query()  # use only when retry not supported directly by the client
     def _upsert_session(
         self, session_lifetime: TimeDelta, session: ServerSideSession, store_id: str
-    ) -> None:
-        """Update existing or create new session in the session storage."""
+    ) -> Optional[bool]:
+        """Update existing or create new session in the session storage.
+
+        Returns ``True`` when the record is known to be saved, ``False`` when
+        the backend reports that saving failed, and ``None`` when the backend
+        does not report a result.
+        """
         raise NotImplementedError()
 
     @retry_query()  # use only when retry not supported directly by the client

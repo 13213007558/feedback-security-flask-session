@@ -49,6 +49,24 @@ As one tool among others that can mitigate session fixation, is regenerating the
         app.session_interface.regenerate(session)
         # your response ...
 
+The method always rotates the identifier, including when the session is
+currently empty. This supports flows that clear anonymous data first, rotate,
+and then write the authenticated identity. Calling it multiple times in one
+request produces a new identifier each time and removes every earlier record.
+
+Rotation removes the previous record and verifies that the old identifier can
+no longer load session data. A reported deletion failure, a raised storage error,
+or a record that is still readable causes
+:class:`flask_session.base.SessionRegenerationError`. The method assigns a fresh
+identifier before raising as well, so an application that catches the error does
+not persist the new identity under the old identifier. The response is then
+refused by ``save_session`` instead of issuing a cookie for a rotation that did
+not complete.
+
+There is an unavoidable window between deleting the old record and saving the
+new one. If saving fails, the response fails and neither the old identifier nor
+the rejected new one can load the new identity; the user must log in again.
+
 .. _Flask: https://flask.palletsprojects.com/en/2.3.x/security/#set-cookie-options
 .. _MDN: https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
 .. _OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
