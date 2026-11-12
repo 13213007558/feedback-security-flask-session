@@ -1,3 +1,13 @@
+Unreleased
+----------
+
+Added
+~~~~~
+- Add a batched, conditional cleanup contract for backends without native TTL
+  (``flask_session.cleanup``), including a dependency-free in-memory reference
+  store, a resumable count-only sweep runner and a fail-closed backend
+  capability audit.
+
 0.8.0 - 2024-03-26
 ------------------
 

@@ -16,3 +16,7 @@ Run the the following command regularly with a cron job or scheduler such as Her
 Alternatively, set the configuration variable ``SESSION_CLEANUP_N_REQUESTS`` to the average number of requests after which the cleanup should be performed. This is less desirable than using the scheduled app command cleanup as it may slow down some requests but may be useful for small applications or rapid development.
 
 This is not required for the ``Redis``, ``Memecached``, ``Filesystem``, ``Mongodb`` storage engines, as they support time-to-live for records.
+
+For backends without native TTL that need safe concurrent cleanup, see the
+:doc:`cleanup_contract` for the bounded, conditional sweep contract, its
+in-memory reference implementation and the backend capability gate.
