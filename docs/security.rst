@@ -53,3 +53,13 @@ As one tool among others that can mitigate session fixation, is regenerating the
 .. _MDN: https://developer.mozilla.org/en-US/docs/Web/HTTP/Cookies
 .. _OWASP: https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html
 .. _Flask-Talisman: https://github.com/wntrblm/flask-talisman
+
+Protected fields
+------------------
+
+When several extensions share one session, identity and authentication-strength
+fields (for example ``user_id`` or ``auth_level``) should only be writable by
+the authentication extension. Configure ``SESSION_PROTECTED_FIELDS`` and grant
+the matching scope inside the authentication flow so other extensions cannot
+overwrite those fields, including via nested mutations or a full-dictionary
+replacement. See :doc:`config_guide` for the full reference.

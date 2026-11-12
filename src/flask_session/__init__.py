@@ -1,6 +1,9 @@
 from .defaults import Defaults
+from .exceptions import ProtectedFieldError
 
 __version__ = "0.8.0"
+
+__all__ = ["Session", "Defaults", "ProtectedFieldError"]
 
 
 class Session:
@@ -56,6 +59,11 @@ class Session:
         SESSION_ID_LENGTH = config.get("SESSION_ID_LENGTH", Defaults.SESSION_ID_LENGTH)
         SESSION_SERIALIZATION_FORMAT = config.get(
             "SESSION_SERIALIZATION_FORMAT", Defaults.SESSION_SERIALIZATION_FORMAT
+        )
+
+        # Protected field policy: {field: scope or iterable of scopes}
+        SESSION_PROTECTED_FIELDS = config.get(
+            "SESSION_PROTECTED_FIELDS", Defaults.SESSION_PROTECTED_FIELDS
         )
 
         # Redis settings
@@ -210,5 +218,15 @@ class Session:
 
         else:
             raise ValueError(f"Unrecognized value for SESSION_TYPE: {SESSION_TYPE}")
+
+        # Apply the protected field policy centrally so individual backends do
+        # not need to thread the option through their constructors. The base
+        # interface normalizes the mapping into {field: frozenset(scopes)}.
+        session_interface.protected_fields = {
+            field: frozenset(
+                (scopes,) if isinstance(scopes, str) else tuple(scopes)
+            )
+            for field, scopes in (SESSION_PROTECTED_FIELDS or {}).items()
+        }
 
         return session_interface

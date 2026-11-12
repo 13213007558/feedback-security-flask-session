@@ -1,3 +1,10 @@
+Unreleased
+----------
+
+Added
+~~~~~
+-   Add optional protected session fields (``SESSION_PROTECTED_FIELDS``). Writes to a configured field require an explicit scope granted through ``ServerSideSession.grant_scopes``; unauthorized writes raise ``ProtectedFieldError`` without changing session state. Enforcement covers item assignment/deletion, ``update``, ``pop``, ``popitem``, ``setdefault``, ``clear`` and in-place mutation of nested containers, and is re-applied when sessions are restored from storage. Ordinary unlisted fields keep their previous dictionary behavior.
+
 0.8.0 - 2024-03-26
 ------------------
 

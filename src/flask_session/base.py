@@ -1,7 +1,7 @@
 import secrets
 import warnings
 from abc import ABC, abstractmethod
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 try:
     import cPickle as pickle
@@ -10,7 +10,7 @@ except ImportError:
 
 import random
 from datetime import timedelta as TimeDelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, Union
 
 import msgspec
 from flask import Flask, Request, Response
@@ -19,8 +19,10 @@ from flask.sessions import SessionMixin
 from itsdangerous import BadSignature, Signer, want_bytes
 from werkzeug.datastructures import CallbackDict
 
+from ._protected import wrap_value
 from ._utils import retry_query
 from .defaults import Defaults
+from .exceptions import ProtectedFieldError
 
 
 class ServerSideSession(CallbackDict, SessionMixin):
@@ -53,6 +55,15 @@ class ServerSideSession(CallbackDict, SessionMixin):
 
     Default is ``False``.
 
+    .. attribute:: protected_fields
+
+    Optional mapping of protected session fields to the set of scopes allowed
+    to write them. When empty (the default) the session behaves exactly like an
+    ordinary dictionary and every key remains freely writable. When a field is
+    listed, any write to it requires one of the configured scopes to be active
+    for the current request through :meth:`grant_scopes`. Ordinary, unlisted
+    fields keep their original dictionary behavior.
+
     """
 
     def __bool__(self) -> bool:
@@ -63,17 +74,85 @@ class ServerSideSession(CallbackDict, SessionMixin):
         initial: Optional[Dict[str, Any]] = None,
         sid: Optional[str] = None,
         permanent: Optional[bool] = None,
+        protected_fields: Optional[
+            Mapping[str, Union[str, Iterable[str]]]
+        ] = None,
     ):
         def on_update(self) -> None:
             self.modified = True
             self.accessed = True
 
         CallbackDict.__init__(self, initial, on_update)
+        # Normalize the protected field policy into {field: frozenset(scopes)}.
+        # Stored on the session object rather than the mapping, so it is never
+        # serialized and never leaks into stored session data.
+        self.protected_fields: Dict[str, frozenset] = {
+            field: frozenset(
+                (scopes,) if isinstance(scopes, str) else tuple(scopes)
+            )
+            for field, scopes in (protected_fields or {}).items()
+        }
+        # Scopes granted for the lifetime of this request-scoped session
+        # instance. A fresh session is created per request, so scopes can never
+        # carry over between requests or concurrent requests.
+        self._active_scopes: set = set()
         self.sid = sid
         if permanent:
             self.permanent = permanent
         self.modified = False
         self.accessed = False
+        # Wrap nested mutable values of protected fields loaded from storage so
+        # in-place nested mutations are covered by the same scope checks.
+        for field in self.protected_fields:
+            if field in CallbackDict.keys(self):
+                value = CallbackDict.__getitem__(self, field)
+                CallbackDict.__setitem__(
+                    self, field, wrap_value(value, field, self._enforce_scope)
+                )
+
+    # PROTECTED FIELD / SCOPE API
+
+    def is_protected(self, key: str) -> bool:
+        """Return whether writes to ``key`` require an explicit scope."""
+        return key in self.protected_fields
+
+    def can_write(self, key: str) -> bool:
+        """Return whether the currently active scopes allow writing ``key``."""
+        required = self.protected_fields.get(key)
+        return required is None or bool(required & self._active_scopes)
+
+    def _enforce_scope(self, key: str) -> None:
+        """Raise :class:`ProtectedFieldError` if ``key`` is not writable now."""
+        required = self.protected_fields.get(key)
+        if required is not None and not (required & self._active_scopes):
+            raise ProtectedFieldError(
+                key=key,
+                required_scopes=required,
+                active_scopes=frozenset(self._active_scopes),
+            )
+
+    @contextmanager
+    def grant_scopes(self, *scopes: str):
+        """Temporarily grant write scopes for this session (request scoped).
+
+        Only active for the duration of the ``with`` block and only on this
+        session instance. On exit the previously active scopes are restored,
+        so nested grants and early exceptions cannot leak a scope to later
+        code or to a concurrent request::
+
+            with session.grant_scopes("auth"):
+                session["user_id"] = current_user.id
+
+        Ordinary fields remain writable with or without any granted scope.
+        """
+        previous = set(self._active_scopes)
+        self._active_scopes = previous | set(scopes)
+        try:
+            yield self
+        finally:
+            self._active_scopes = previous
+
+    # READ METHODS (unchanged semantics apart from accessed tracking)
 
     def __getitem__(self, key: str) -> Any:
         self.accessed = True
@@ -83,13 +162,78 @@ class ServerSideSession(CallbackDict, SessionMixin):
         self.accessed = True
         return super().get(key, default)
 
+    # WRITE / MUTATING METHODS
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._enforce_scope(key)
+        if self.is_protected(key):
+            value = wrap_value(value, key, self._enforce_scope)
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key: str) -> None:
+        self._enforce_scope(key)
+        super().__delitem__(key)
+
     def setdefault(self, key: str, default: Any = None) -> Any:
         self.accessed = True
-        return super().setdefault(key, default)
+        if key not in self:
+            self._enforce_scope(key)
+            if self.is_protected(key):
+                default = wrap_value(default, key, self._enforce_scope)
+            super().__setitem__(key, default)
+        return super().__getitem__(key)
+
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        """Merge keys into the session, enforcing protected field scopes.
+
+        Every targeted protected field is validated before any value is
+        written, so a refusal leaves the session completely untouched.
+        """
+        changes: Dict[str, Any] = {}
+        if args:
+            if len(args) > 1:
+                raise TypeError(
+                    f"update expected at most 1 argument, got {len(args)}"
+                )
+            other = args[0]
+            if hasattr(other, "keys"):
+                for key in other:
+                    changes[key] = other[key]
+            else:
+                changes.update(other)
+        changes.update(kwargs)
+
+        # Validate all writes up front to preserve the previous consistent
+        # state when any single protected field is unauthorized.
+        for key in changes:
+            self._enforce_scope(key)
+        for key, value in changes.items():
+            if self.is_protected(key):
+                value = wrap_value(value, key, self._enforce_scope)
+            super().__setitem__(key, value)
+
+    def pop(self, key: str, *default: Any) -> Any:
+        self._enforce_scope(key)
+        return super().pop(key, *default)
+
+    def popitem(self) -> Any:
+        # Popitem targets an arbitrary key; refuse unless every remaining key
+        # is writable, otherwise a protected value could be removed blindly.
+        for key in CallbackDict.keys(self):
+            self._enforce_scope(key)
+        return super().popitem()
 
     def clear(self) -> None:
-        """Clear the session except for the '_permanent' key."""
+        """Clear the session except for the '_permanent' key.
+
+        Protected fields are retained unless the active scopes authorize their
+        removal. Refusal happens before anything is removed, keeping the
+        previous state intact.
+        """
         permanent = self.get("_permanent", False)
+        for key in CallbackDict.keys(self):
+            if key != "_permanent":
+                self._enforce_scope(key)
         super().clear()
         self["_permanent"] = permanent
 
@@ -180,6 +324,12 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         self.has_same_site_capability = hasattr(self, "get_cookie_samesite")
         self.cleanup_n_requests = cleanup_n_requests
 
+        # Protected field policy as {field: frozenset(scopes)}. Empty by
+        # default, which leaves ordinary dictionary behavior untouched. The
+        # Session factory overwrites this from SESSION_PROTECTED_FIELDS after
+        # the concrete backend has been constructed.
+        self.protected_fields: Dict[str, frozenset] = {}
+
         # Cleanup settings for non-TTL databases only
         if getattr(self, "ttl", None) is False:
             if self.cleanup_n_requests:
@@ -195,6 +345,24 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
     def _generate_sid(self, session_id_length: int) -> str:
         """Generate a random session id."""
         return secrets.token_urlsafe(session_id_length)
+
+    def _make_session(
+        self,
+        initial: Optional[dict] = None,
+        sid: Optional[str] = None,
+        permanent: Optional[bool] = None,
+    ) -> ServerSideSession:
+        """Create a session object wired with the protected field policy.
+
+        Centralizing construction keeps every backend on the same policy
+        without each backend having to know about protected fields.
+        """
+        return self.session_class(
+            initial=initial,
+            sid=sid,
+            permanent=self.permanent if permanent is None else permanent,
+            protected_fields=self.protected_fields,
+        )
 
     # TODO: Remove in 1.0.0
     def _get_signer(self, app: Flask) -> Signer:
@@ -336,14 +504,14 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
         # If there's no session ID, generate a new one
         if not sid:
             sid = self._generate_sid(self.sid_length)
-            return self.session_class(sid=sid, permanent=self.permanent)
+            return self._make_session(sid=sid)
         # If the session ID is signed, unsign it
         if self.use_signer:
             try:
                 sid = self._unsign(app, sid)
             except BadSignature:
                 sid = self._generate_sid(self.sid_length)
-                return self.session_class(sid=sid, permanent=self.permanent)
+                return self._make_session(sid=sid)
 
         # Retrieve the session data from the database
         store_id = self._get_store_id(sid)
@@ -351,11 +519,11 @@ class ServerSideSessionInterface(FlaskSessionInterface, ABC):
 
         # If the saved session exists, load the session data from the document
         if saved_session_data is not None:
-            return self.session_class(saved_session_data, sid=sid)
+            return self._make_session(saved_session_data, sid=sid)
 
         # If the saved session does not exist, create a new session
         sid = self._generate_sid(self.sid_length)
-        return self.session_class(sid=sid, permanent=self.permanent)
+        return self._make_session(sid=sid)
 
     # METHODS TO BE IMPLEMENTED BY SUBCLASSES
 

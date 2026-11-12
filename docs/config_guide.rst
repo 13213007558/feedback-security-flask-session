@@ -11,4 +11,6 @@ Configuration Guide
 
 .. include:: config_serialization.rst
 
+.. include:: config_protected.rst
+
 .. include:: config_flask.rst

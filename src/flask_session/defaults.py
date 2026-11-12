@@ -10,6 +10,11 @@ class Defaults:
     SESSION_ID_LENGTH = 32
     SESSION_SERIALIZATION_FORMAT = "msgpack"
 
+    # Mapping of protected session fields to the scopes allowed to write them.
+    # Empty by default: ordinary dictionary behavior is preserved unless an
+    # application explicitly opts in.
+    SESSION_PROTECTED_FIELDS = {}
+
     # Clean up settings for non TTL backends (SQL, PostgreSQL, etc.)
     SESSION_CLEANUP_N_REQUESTS = None
 

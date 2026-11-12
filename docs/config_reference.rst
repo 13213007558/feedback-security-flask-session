@@ -59,6 +59,19 @@ These are specific to Flask-Session.
 
    .. versionadded:: 0.7.0
 
+.. py:data:: SESSION_PROTECTED_FIELDS
+
+   An optional mapping of session fields to the scope (``str``) or iterable of
+   scopes authorized to write them. Fields not listed remain ordinary, freely
+   writable dictionary keys. Writes to listed fields require a matching scope
+   granted through
+   :meth:`flask_session.base.ServerSideSession.grant_scopes`; unauthorized
+   writes raise :class:`flask_session.exceptions.ProtectedFieldError` and leave
+   the session unchanged. The mapping and the active scopes are never stored
+   with the session data.
+
+   Default: ``{}`` (protection disabled, plain dictionary behavior)
+
 .. deprecated:: 0.7.0
     ``SESSION_USE_SIGNER``
 
